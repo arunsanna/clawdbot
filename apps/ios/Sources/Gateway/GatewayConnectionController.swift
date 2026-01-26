@@ -278,8 +278,8 @@ final class GatewayConnectionController {
         let displayName = self.resolvedDisplayName(defaults: defaults)
 
         return GatewayConnectOptions(
-            role: "node",
-            scopes: [],
+            role: "operator",
+            scopes: ["operator.admin"],
             caps: self.currentCaps(),
             commands: self.currentCommands(),
             permissions: [:],

@@ -459,9 +459,18 @@ final class AppState {
             var gateway = root["gateway"] as? [String: Any] ?? [:]
             var changed = false
 
+            // Check if a local gateway is running before overwriting mode.
+            // This prevents the app from killing a CLI-started gateway when the user
+            // configures remote mode for external access (e.g., wss://domain:port).
+            let localGatewayRunning = await GatewayProcessChecker.isLocalGatewayRunning()
             let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
             if let desiredMode {
-                if currentMode != desiredMode {
+                // Skip writing mode=remote if a local gateway is currently running.
+                // The user may want to run the gateway locally but connect via external DNS.
+                if desiredMode == "remote", localGatewayRunning, currentMode == "local" {
+                    // Local gateway is running; don't overwrite to remote mode
+                } else if currentMode != desiredMode {
                     gateway["mode"] = desiredMode
                     changed = true
                 }

@@ -619,6 +619,49 @@ actor GatewayEndpointStore {
 }
 
 extension GatewayEndpointStore {
+    /// Returns a human-readable description of the current resolved endpoint.
+    /// Useful for error messages that should show the actual URL being used.
+    static func resolvedEndpointDescription() async -> String? {
+        let state = await GatewayEndpointStore.shared.state
+        switch state {
+        case let .ready(_, url, _, _):
+            return url.host.map { host in
+                let port = url.port ?? 18789
+                return "\(host):\(port)"
+            }
+        case let .connecting(mode, _):
+            // Return the expected endpoint based on mode
+            if mode == .remote {
+                let root = ClawdbotConfigFile.loadDict()
+                if let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) {
+                    let port = url.port ?? 18789
+                    return url.host.map { "\($0):\(port)" }
+                }
+            }
+            return nil
+        case .unavailable:
+            return nil
+        }
+    }
+
+    /// Synchronous version that reads from config for error message display.
+    /// For remote mode, returns the configured URL; for local, returns localhost:port.
+    static func resolvedEndpointDescriptionSync() -> String {
+        let root = ClawdbotConfigFile.loadDict()
+        let mode = ConnectionModeResolver.resolve(root: root).mode
+        let port = GatewayEnvironment.gatewayPort()
+
+        if mode == .remote {
+            if let url = GatewayRemoteConfig.resolveGatewayUrl(root: root),
+               let host = url.host
+            {
+                let urlPort = url.port ?? port
+                return "\(host):\(urlPort)"
+            }
+        }
+        return "localhost:\(port)"
+    }
+
     static func dashboardURL(for config: GatewayConnection.Config) throws -> URL {
         guard var components = URLComponents(url: config.url, resolvingAgainstBaseURL: false) else {
             throw NSError(domain: "Dashboard", code: 1, userInfo: [

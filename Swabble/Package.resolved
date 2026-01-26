@@ -1,5 +1,5 @@
 {
-  "originHash" : "24a723309d7a0039d3df3051106f77ac1ed7068a02508e3a6804e41d757e6c72",
+  "originHash" : "39f00d183f4eb4ecd8c9c6ef2063194505c614b3c6145217f0e02deb446d7225",
   "pins" : [
     {
       "identity" : "commander",
@@ -60,8 +60,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/gonzalezreal/textual",
       "state" : {
-        "revision" : "5b06b811c0f5313b6b84bbef98c635a630638c38",
-        "version" : "0.3.1"
+        "revision" : "a03c1e103d88de4ea0dd8320ea1611ec0d4b29b3",
+        "version" : "0.2.0"
       }
     }
   ],

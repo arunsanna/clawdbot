@@ -215,23 +215,23 @@ final class ControlChannel {
         }
 
         if let urlError = error as? URLError {
-            let port = GatewayEnvironment.gatewayPort()
+            let endpoint = GatewayEndpointStore.resolvedEndpointDescriptionSync()
             switch urlError.code {
             case .cancelled:
-                return "Gateway connection was closed; start the gateway (localhost:\(port)) and retry."
+                return "Gateway connection was closed; start the gateway (\(endpoint)) and retry."
             case .cannotFindHost, .cannotConnectToHost:
                 let isRemote = CommandResolver.connectionModeIsRemote()
                 if isRemote {
                     return """
-                    Cannot reach gateway at localhost:\(port).
-                    Remote mode uses an SSH tunnel—check the SSH target and that the tunnel is running.
+                    Cannot reach gateway at \(endpoint).
+                    Remote mode uses direct WebSocket—check the gateway URL and that the gateway is accessible.
                     """
                 }
-                return "Cannot reach gateway at localhost:\(port); ensure the gateway is running."
+                return "Cannot reach gateway at \(endpoint); ensure the gateway is running."
             case .networkConnectionLost:
                 return "Gateway connection dropped; gateway likely restarted—retry."
             case .timedOut:
-                return "Gateway request timed out; check gateway on localhost:\(port)."
+                return "Gateway request timed out; check gateway at \(endpoint)."
             case .notConnectedToInternet:
                 return "No network connectivity; cannot reach gateway."
             default:
@@ -240,8 +240,8 @@ final class ControlChannel {
         }
 
         if nsError.domain == "Gateway", nsError.code == 5 {
-            let port = GatewayEnvironment.gatewayPort()
-            return "Gateway request timed out; check the gateway process on localhost:\(port)."
+            let endpoint = GatewayEndpointStore.resolvedEndpointDescriptionSync()
+            return "Gateway request timed out; check the gateway process at \(endpoint)."
         }
 
         let detail = nsError.localizedDescription.isEmpty ? "unknown gateway error" : nsError.localizedDescription

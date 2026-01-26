@@ -55,8 +55,17 @@ final class ConnectionModeCoordinator {
             Task.detached { await PortGuardian.shared.sweep(mode: .local) }
 
         case .remote:
-            // Never run a local gateway in remote mode.
-            GatewayProcessManager.shared.stop()
+            // In remote mode with direct transport, preserve a locally-running gateway.
+            // This allows the user to run the gateway locally while external clients
+            // connect via DNS (e.g., wss://clawdbot.arunlabs.com:18789).
+            let root = ClawdbotConfigFile.loadDict()
+            let transport = GatewayRemoteConfig.resolveTransport(root: root)
+            let localGatewayRunning = GatewayProcessChecker.isLocalGatewayRunningSync()
+            if transport == .direct, localGatewayRunning {
+                self.logger.info("remote mode with direct transport: preserving local gateway")
+            } else {
+                GatewayProcessManager.shared.stop()
+            }
             WebChatManager.shared.resetTunnels()
 
             do {
