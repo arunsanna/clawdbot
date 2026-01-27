@@ -185,8 +185,22 @@ export function loadSessionEntry(sessionKey: string) {
   const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const store = loadSessionStore(storePath);
-  const entry = store[canonicalKey];
-  return { cfg, storePath, store, entry, canonicalKey };
+  // Try canonical key first, fall back to raw key for backward compatibility
+  // Also try parsed.rest for canonical keys like agent:main:main -> main
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rawFromCanonical = parsed?.rest;
+  const entry =
+    store[canonicalKey] ??
+    (sessionKey !== canonicalKey ? store[sessionKey] : undefined) ??
+    (rawFromCanonical && rawFromCanonical !== canonicalKey ? store[rawFromCanonical] : undefined);
+  const effectiveKey = store[canonicalKey]
+    ? canonicalKey
+    : store[sessionKey]
+      ? sessionKey
+      : rawFromCanonical && store[rawFromCanonical]
+        ? rawFromCanonical
+        : sessionKey;
+  return { cfg, storePath, store, entry, canonicalKey: effectiveKey };
 }
 
 export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
@@ -701,7 +715,11 @@ export function listSessionsFromStore(params: {
         }
       }
     }
-    return { ...rest, derivedTitle, lastMessagePreview } satisfies GatewaySessionRow;
+    return {
+      ...rest,
+      derivedTitle,
+      lastMessagePreview,
+    } satisfies GatewaySessionRow;
   });
 
   return {
