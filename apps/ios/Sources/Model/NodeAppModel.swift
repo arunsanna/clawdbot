@@ -253,9 +253,11 @@ final class NodeAppModel {
                                     self.gatewayRemoteAddress = addr
                                 }
                             }
-                            await self.refreshBrandingFromGateway()
-                            await self.startVoiceWakeSync()
-                            await self.showA2UIOnConnectIfNeeded()
+                            // Fire-and-forget: these make RPC calls, but listen() hasn't started yet.
+                            // Awaiting them here would deadlock (no receive loop to process responses).
+                            Task { await self.refreshBrandingFromGateway() }
+                            Task { await self.startVoiceWakeSync() }
+                            Task { await self.showA2UIOnConnectIfNeeded() }
                         },
                         onDisconnected: { [weak self] reason in
                             guard let self else { return }
