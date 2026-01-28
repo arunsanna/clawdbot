@@ -373,6 +373,8 @@ private final class ScreenNavigationDelegate: NSObject, WKNavigationDelegate {
         didFailProvisionalNavigation _: WKNavigation?,
         withError error: any Error)
     {
+        // Skip transient network errors that auto-recover (e.g. "The network connection was lost")
+        if Self.isTransientNetworkError(error) { return }
         self.controller?.errorText = error.localizedDescription
     }
 
@@ -382,7 +384,26 @@ private final class ScreenNavigationDelegate: NSObject, WKNavigationDelegate {
     }
 
     func webView(_: WKWebView, didFail _: WKNavigation?, withError error: any Error) {
+        // Skip transient network errors that auto-recover
+        if Self.isTransientNetworkError(error) { return }
         self.controller?.errorText = error.localizedDescription
+    }
+
+    /// Returns true for network errors that typically auto-recover (connection lost, timeout, etc.)
+    private static func isTransientNetworkError(_ error: any Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == NSURLErrorDomain else { return false }
+        switch nsError.code {
+        case NSURLErrorNetworkConnectionLost,      // -1005: "The network connection was lost"
+             NSURLErrorNotConnectedToInternet,     // -1009: "The Internet connection appears to be offline"
+             NSURLErrorTimedOut,                   // -1001: "The request timed out"
+             NSURLErrorCannotFindHost,             // -1003: "A server with the specified hostname could not be found"
+             NSURLErrorCannotConnectToHost,        // -1004: "Could not connect to the server"
+             NSURLErrorDNSLookupFailed:            // -1006: "The host name could not be resolved"
+            return true
+        default:
+            return false
+        }
     }
 }
 

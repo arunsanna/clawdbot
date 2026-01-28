@@ -151,16 +151,25 @@ public actor GatewayNodeSession {
 
     public func request(method: String, paramsJSON: String?, timeoutSeconds: Int = 15) async throws -> Data {
         guard let channel = self.channel else {
+            self.logger.error("[GW-RPC] \(method) FAILED: channel is nil (not connected)")
             throw NSError(domain: "Gateway", code: 11, userInfo: [
                 NSLocalizedDescriptionKey: "not connected",
             ])
         }
 
+        self.logger.error("[GW-RPC] \(method) starting (timeout: \(timeoutSeconds)s)")
         let params = try self.decodeParamsJSON(paramsJSON)
-        return try await channel.request(
-            method: method,
-            params: params,
-            timeoutMs: Double(timeoutSeconds * 1000))
+        do {
+            let result = try await channel.request(
+                method: method,
+                params: params,
+                timeoutMs: Double(timeoutSeconds * 1000))
+            self.logger.error("[GW-RPC] \(method) succeeded (\(result.count) bytes)")
+            return result
+        } catch {
+            self.logger.error("[GW-RPC] \(method) FAILED: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
     }
 
     public func subscribeServerEvents(bufferingNewest: Int = 200) -> AsyncStream<EventFrame> {
@@ -244,7 +253,13 @@ public actor GatewayNodeSession {
             return nil
         }
         return dict.reduce(into: [:]) { acc, entry in
-            acc[entry.key] = AnyCodable(entry.value)
+            // Preserve boolean type: NSNumber from JSONSerialization loses bool vs int distinction.
+            // Check CFBooleanGetTypeID to detect actual JSON booleans.
+            if let num = entry.value as? NSNumber, CFGetTypeID(num) == CFBooleanGetTypeID() {
+                acc[entry.key] = AnyCodable(num.boolValue)
+            } else {
+                acc[entry.key] = AnyCodable(entry.value)
+            }
         }
     }
 

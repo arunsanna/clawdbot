@@ -11,6 +11,8 @@ struct ChatMarkdownRenderer: View {
     enum Context {
         case user
         case assistant
+        case liquidGlassUser
+        case liquidGlassAssistant
     }
 
     let text: String
@@ -41,10 +43,14 @@ private struct ChatMarkdownStyle: ViewModifier {
     let context: ChatMarkdownRenderer.Context
     let font: Font
     let textColor: Color
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var isDark: Bool { self.colorScheme == .dark }
 
     func body(content: Content) -> some View {
         Group {
-            if self.variant == .compact {
+            // Use .default style for liquid glass contexts to avoid gitHub's dark code backgrounds
+            if self.variant == .compact || self.isLiquidGlass {
                 content.textual.structuredTextStyle(.default)
             } else {
                 content.textual.structuredTextStyle(.gitHub)
@@ -56,12 +62,37 @@ private struct ChatMarkdownStyle: ViewModifier {
         .textual.textSelection(.enabled)
     }
 
+    private var isLiquidGlass: Bool {
+        self.context == .liquidGlassUser || self.context == .liquidGlassAssistant
+    }
+
     private var inlineStyle: InlineStyle {
-        let linkColor: Color = self.context == .user ? self.textColor : .accentColor
+        let isUser = self.context == .user || self.context == .liquidGlassUser
+        let linkColor: Color = isUser ? self.textColor : .accentColor
         let codeScale: CGFloat = self.variant == .compact ? 0.85 : 0.9
-        return InlineStyle()
-            .code(.monospaced, .fontScale(codeScale))
-            .link(.foregroundColor(linkColor))
+
+        // Terminal style for liquid glass: dark background, green/cyan text
+        let (codeBackground, codeTextColor): (Color, Color?) = {
+            switch self.context {
+            case .liquidGlassAssistant, .liquidGlassUser:
+                // Terminal style: always dark background with green text
+                let terminalBg = Color(red: 0.1, green: 0.1, blue: 0.12)
+                let terminalText = Color(red: 0.4, green: 0.9, blue: 0.4) // Terminal green
+                return (terminalBg, terminalText)
+            default:
+                return (Color.white.opacity(0.1), nil)
+            }
+        }()
+
+        if let textColor = codeTextColor {
+            return InlineStyle()
+                .code(.monospaced, .fontScale(codeScale), .backgroundColor(codeBackground), .foregroundColor(textColor))
+                .link(.foregroundColor(linkColor))
+        } else {
+            return InlineStyle()
+                .code(.monospaced, .fontScale(codeScale), .backgroundColor(codeBackground))
+                .link(.foregroundColor(linkColor))
+        }
     }
 }
 

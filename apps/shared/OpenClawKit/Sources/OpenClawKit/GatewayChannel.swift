@@ -247,8 +247,10 @@ public actor GatewayChannelActor {
             self.logger.error("gateway ws connect failed \(wrapped.localizedDescription, privacy: .public)")
             throw wrapped
         }
+        self.logger.error("[CONNECT] sendConnect succeeded, starting listen loop")
         self.listen()
         self.connected = true
+        self.logger.error("[CONNECT] connected = true")
         self.backoffMs = 500
         self.lastSeq = nil
 
@@ -321,7 +323,7 @@ public actor GatewayChannelActor {
             authSource = .none
         }
         self.lastAuthSource = authSource
-        self.logger.info("gateway connect auth=\(authSource.rawValue, privacy: .public)")
+        self.logger.error("[SEND-CONNECT] auth=\(authSource.rawValue, privacy: .public)")
         let canFallbackToShared = storedToken != nil && self.token != nil
         if let authToken {
             params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(authToken)])
@@ -329,7 +331,9 @@ public actor GatewayChannelActor {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
+        self.logger.error("[SEND-CONNECT] Waiting for connect.challenge...")
         let connectNonce = try await self.waitForConnectChallenge()
+        self.logger.error("[SEND-CONNECT] Got challenge nonce: \(connectNonce ?? "nil", privacy: .public)")
         let scopesValue = scopes.joined(separator: ",")
         var payloadParts = [
             connectNonce == nil ? "v1" : "v2",
@@ -365,11 +369,16 @@ public actor GatewayChannelActor {
             method: "connect",
             params: ProtoAnyCodable(params))
         let data = try self.encoder.encode(frame)
+        self.logger.error("[SEND-CONNECT] Sending connect request (id=\(reqId, privacy: .public))")
         try await self.task?.send(.data(data))
+        self.logger.error("[SEND-CONNECT] Connect request sent, waiting for response...")
         do {
             let response = try await self.waitForConnectResponse(reqId: reqId)
+            self.logger.error("[SEND-CONNECT] Got connect response, handling...")
             try await self.handleConnectResponse(response, identity: identity, role: role)
+            self.logger.error("[SEND-CONNECT] Connect response handled successfully")
         } catch {
+            self.logger.error("[SEND-CONNECT] Connect FAILED: \(error.localizedDescription, privacy: .public)")
             if canFallbackToShared {
                 DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: role)
             }
@@ -382,18 +391,23 @@ public actor GatewayChannelActor {
         identity: DeviceIdentity,
         role: String
     ) async throws {
+        self.logger.error("[HANDLE-CONNECT] ok=\(res.ok ?? true), hasPayload=\(res.payload != nil)")
         if res.ok == false {
             let msg = (res.error?["message"]?.value as? String) ?? "gateway connect failed"
+            self.logger.error("[HANDLE-CONNECT] FAILED: \(msg, privacy: .public)")
             throw NSError(domain: "Gateway", code: 1008, userInfo: [NSLocalizedDescriptionKey: msg])
         }
         guard let payload = res.payload else {
+            self.logger.error("[HANDLE-CONNECT] FAILED: missing payload")
             throw NSError(
                 domain: "Gateway",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "connect failed (missing payload)"])
         }
+        self.logger.error("[HANDLE-CONNECT] Decoding HelloOk payload...")
         let payloadData = try self.encoder.encode(payload)
         let ok = try decoder.decode(HelloOk.self, from: payloadData)
+        self.logger.error("[HANDLE-CONNECT] HelloOk decoded successfully")
         if let tick = ok.policy["tickIntervalMs"]?.value as? Double {
             self.tickIntervalMs = tick
         } else if let tick = ok.policy["tickIntervalMs"]?.value as? Int {
@@ -410,22 +424,28 @@ public actor GatewayChannelActor {
                 token: deviceToken,
                 scopes: scopes)
         }
+        self.logger.error("[HANDLE-CONNECT] Setting tick state...")
         self.lastTick = Date()
         self.tickTask?.cancel()
         self.tickTask = Task { [weak self] in
             guard let self else { return }
             await self.watchTicks()
         }
+        self.logger.error("[HANDLE-CONNECT] Calling pushHandler with snapshot...")
         await self.pushHandler?(.snapshot(ok))
+        self.logger.error("[HANDLE-CONNECT] COMPLETE")
     }
 
     private func listen() {
+        self.logger.error("[LISTEN] Waiting for message...")
         self.task?.receive { [weak self] result in
             guard let self else { return }
             switch result {
             case let .failure(err):
+                self.logger.error("[LISTEN] Receive FAILED: \(err.localizedDescription, privacy: .public)")
                 Task { await self.handleReceiveFailure(err) }
             case let .success(msg):
+                self.logger.error("[LISTEN] Message received")
                 Task {
                     await self.handle(msg)
                     await self.listen()
@@ -449,18 +469,27 @@ public actor GatewayChannelActor {
         case let .string(s): s.data(using: .utf8)
         @unknown default: nil
         }
-        guard let data else { return }
+        guard let data else {
+            self.logger.error("[HANDLE] No data in message")
+            return
+        }
+        self.logger.error("[HANDLE] Decoding frame (\(data.count) bytes)")
         guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else {
-            self.logger.error("gateway decode failed")
+            self.logger.error("[HANDLE] Decode FAILED")
             return
         }
         switch frame {
         case let .res(res):
+            self.logger.error("[HANDLE] Response frame id=\(res.id, privacy: .public)")
             let id = res.id
             if let waiter = pending.removeValue(forKey: id) {
+                self.logger.error("[HANDLE] Found waiter, resuming")
                 waiter.resume(returning: .res(res))
+            } else {
+                self.logger.error("[HANDLE] No waiter found for id")
             }
         case let .event(evt):
+            self.logger.error("[HANDLE] Event frame: \(evt.event, privacy: .public)")
             if evt.event == "connect.challenge" { return }
             if let seq = evt.seq {
                 if let last = lastSeq, seq > last + 1 {
@@ -471,6 +500,7 @@ public actor GatewayChannelActor {
             if evt.event == "tick" { self.lastTick = Date() }
             await self.pushHandler?(.event(evt))
         default:
+            self.logger.error("[HANDLE] Unknown frame type")
             break
         }
     }

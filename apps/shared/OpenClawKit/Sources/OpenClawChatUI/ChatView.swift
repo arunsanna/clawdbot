@@ -1,23 +1,33 @@
 import SwiftUI
 
 @MainActor
-public struct OpenClawChatView: View {
+public struct ClawdbotChatView: View {
     public enum Style {
         case standard
         case onboarding
+        #if !os(macOS)
+        /// iOS-only liquid glass style with adaptive background, swapped alignments, and compact input bar.
+        case liquidGlass
+        #endif
     }
 
-    @State private var viewModel: OpenClawChatViewModel
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var viewModel: ClawdbotChatViewModel
     @State private var scrollerBottomID = UUID()
     @State private var scrollPosition: UUID?
     @State private var showSessions = false
     @State private var hasPerformedInitialScroll = false
     @State private var isPinnedToBottom = true
-    @State private var lastUserMessageID: UUID?
     private let showsSessionSwitcher: Bool
     private let style: Style
     private let markdownVariant: ChatMarkdownVariant
     private let userAccent: Color?
+
+    #if !os(macOS)
+    private var isDark: Bool { self.colorScheme == .dark }
+    // Adaptive liquid glass: black in dark mode, white in light mode
+    private var liquidGlassBackground: Color { self.isDark ? .black : .white }
+    #endif
 
     private enum Layout {
         #if os(macOS)
@@ -42,7 +52,7 @@ public struct OpenClawChatView: View {
     }
 
     public init(
-        viewModel: OpenClawChatViewModel,
+        viewModel: ClawdbotChatViewModel,
         showsSessionSwitcher: Bool = false,
         style: Style = .standard,
         markdownVariant: ChatMarkdownVariant = .standard,
@@ -57,15 +67,25 @@ public struct OpenClawChatView: View {
 
     public var body: some View {
         ZStack {
+            #if os(macOS)
             if self.style == .standard {
-                OpenClawChatTheme.background
+                ClawdbotChatTheme.background
                     .ignoresSafeArea()
             }
+            #else
+            if self.style == .liquidGlass {
+                self.liquidGlassBackground
+                    .ignoresSafeArea()
+            } else if self.style == .standard {
+                ClawdbotChatTheme.background
+                    .ignoresSafeArea()
+            }
+            #endif
 
             VStack(spacing: Layout.stackSpacing) {
                 self.messageList
                     .padding(.horizontal, Layout.outerPaddingHorizontal)
-                OpenClawChatComposer(
+                ClawdbotChatComposer(
                     viewModel: self.viewModel,
                     style: self.style,
                     showsSessionSwitcher: self.showsSessionSwitcher)
@@ -125,36 +145,21 @@ public struct OpenClawChatView: View {
         .layoutPriority(1)
         .onChange(of: self.viewModel.isLoading) { _, isLoading in
             guard !isLoading, !self.hasPerformedInitialScroll else { return }
-            self.scrollPosition = self.scrollerBottomID
-            self.hasPerformedInitialScroll = true
-            self.isPinnedToBottom = true
+            // Use DispatchQueue to defer scroll until after layout settles
+            DispatchQueue.main.async {
+                self.scrollPosition = self.scrollerBottomID
+                self.hasPerformedInitialScroll = true
+                self.isPinnedToBottom = true
+            }
         }
         .onChange(of: self.viewModel.sessionKey) { _, _ in
+            // Reset scroll state when session changes
             self.hasPerformedInitialScroll = false
             self.isPinnedToBottom = true
-        }
-        .onChange(of: self.viewModel.isSending) { _, isSending in
-            // Scroll to bottom when user sends a message, even if scrolled up.
-            guard isSending, self.hasPerformedInitialScroll else { return }
-            self.isPinnedToBottom = true
-            withAnimation(.snappy(duration: 0.22)) {
-                self.scrollPosition = self.scrollerBottomID
-            }
+            self.scrollPosition = nil
         }
         .onChange(of: self.viewModel.messages.count) { _, _ in
-            guard self.hasPerformedInitialScroll else { return }
-            if let lastMessage = self.viewModel.messages.last,
-               lastMessage.role.lowercased() == "user",
-               lastMessage.id != self.lastUserMessageID {
-                self.lastUserMessageID = lastMessage.id
-                self.isPinnedToBottom = true
-                withAnimation(.snappy(duration: 0.22)) {
-                    self.scrollPosition = self.scrollerBottomID
-                }
-                return
-            }
-
-            guard self.isPinnedToBottom else { return }
+            guard self.hasPerformedInitialScroll, self.isPinnedToBottom else { return }
             withAnimation(.snappy(duration: 0.22)) {
                 self.scrollPosition = self.scrollerBottomID
             }
@@ -176,38 +181,58 @@ public struct OpenClawChatView: View {
     @ViewBuilder
     private var messageListRows: some View {
         ForEach(self.visibleMessages) { msg in
+            let isUser = msg.role.lowercased() == "user"
+            // Liquid glass swaps: user LEFT, assistant RIGHT
+            #if os(macOS)
+            let alignment: Alignment = isUser ? .trailing : .leading
+            #else
+            let alignment: Alignment = self.style == .liquidGlass
+                ? (isUser ? .leading : .trailing)
+                : (isUser ? .trailing : .leading)
+            #endif
             ChatMessageBubble(
                 message: msg,
                 style: self.style,
                 markdownVariant: self.markdownVariant,
                 userAccent: self.userAccent)
-                .frame(
-                    maxWidth: .infinity,
-                    alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
+                .frame(maxWidth: .infinity, alignment: alignment)
         }
 
         if self.viewModel.pendingRunCount > 0 {
-            HStack {
-                ChatTypingIndicatorBubble(style: self.style)
-                    .equatable()
-                Spacer(minLength: 0)
-            }
+            #if os(macOS)
+            let indicatorAlignment: Alignment = .leading
+            #else
+            let indicatorAlignment: Alignment = .leading
+            #endif
+            ChatTypingIndicatorBubble(style: self.style)
+                .equatable()
+                .frame(maxWidth: .infinity, alignment: indicatorAlignment)
         }
 
         if !self.viewModel.pendingToolCalls.isEmpty {
-            ChatPendingToolsBubble(toolCalls: self.viewModel.pendingToolCalls)
+            #if os(macOS)
+            let toolsAlignment: Alignment = .leading
+            #else
+            let toolsAlignment: Alignment = self.style == .liquidGlass ? .trailing : .leading
+            #endif
+            ChatPendingToolsBubble(toolCalls: self.viewModel.pendingToolCalls, style: self.style)
                 .equatable()
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: toolsAlignment)
         }
 
         if let text = self.viewModel.streamingAssistantText, AssistantTextParser.hasVisibleContent(in: text) {
-            ChatStreamingAssistantBubble(text: text, markdownVariant: self.markdownVariant)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            #if os(macOS)
+            let streamAlignment: Alignment = .leading
+            #else
+            let streamAlignment: Alignment = self.style == .liquidGlass ? .trailing : .leading
+            #endif
+            ChatStreamingAssistantBubble(text: text, markdownVariant: self.markdownVariant, style: self.style)
+                .frame(maxWidth: .infinity, alignment: streamAlignment)
         }
     }
 
-    private var visibleMessages: [OpenClawChatMessage] {
-        let base: [OpenClawChatMessage]
+    private var visibleMessages: [ClawdbotChatMessage] {
+        let base: [ClawdbotChatMessage]
         if self.style == .onboarding {
             guard let first = self.viewModel.messages.first else { return [] }
             base = first.role.lowercased() == "user" ? Array(self.viewModel.messages.dropFirst()) : self.viewModel
@@ -324,8 +349,8 @@ public struct OpenClawChatView: View {
         return ("Error", "exclamationmark.triangle.fill", .orange)
     }
 
-    private func mergeToolResults(in messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
-        var result: [OpenClawChatMessage] = []
+    private func mergeToolResults(in messages: [ClawdbotChatMessage]) -> [ClawdbotChatMessage] {
+        var result: [ClawdbotChatMessage] = []
         result.reserveCapacity(messages.count)
 
         for message in messages {
@@ -349,7 +374,7 @@ public struct OpenClawChatView: View {
 
             var content = last.content
             content.append(
-                OpenClawChatMessageContent(
+                ClawdbotChatMessageContent(
                     type: "tool_result",
                     text: toolText,
                     thinking: nil,
@@ -361,7 +386,7 @@ public struct OpenClawChatView: View {
                     name: message.toolName,
                     arguments: nil))
 
-            let merged = OpenClawChatMessage(
+            let merged = ClawdbotChatMessage(
                 id: last.id,
                 role: last.role,
                 content: content,
@@ -376,12 +401,12 @@ public struct OpenClawChatView: View {
         return result
     }
 
-    private func isToolResultMessage(_ message: OpenClawChatMessage) -> Bool {
+    private func isToolResultMessage(_ message: ClawdbotChatMessage) -> Bool {
         let role = message.role.lowercased()
         return role == "toolresult" || role == "tool_result"
     }
 
-    private func toolCallIds(in message: OpenClawChatMessage) -> Set<String> {
+    private func toolCallIds(in message: ClawdbotChatMessage) -> Set<String> {
         var ids = Set<String>()
         for content in message.content {
             let kind = (content.type ?? "").lowercased()
@@ -398,7 +423,7 @@ public struct OpenClawChatView: View {
         return ids
     }
 
-    private func toolResultText(from message: OpenClawChatMessage) -> String {
+    private func toolResultText(from message: ClawdbotChatMessage) -> String {
         let parts = message.content.compactMap { content -> String? in
             let kind = (content.type ?? "text").lowercased()
             guard kind == "text" || kind.isEmpty else { return nil }
@@ -446,7 +471,7 @@ private struct ChatNoticeCard: View {
         .padding(18)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(OpenClawChatTheme.subtleCard)
+                .fill(ClawdbotChatTheme.subtleCard)
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)))
@@ -499,7 +524,7 @@ private struct ChatNoticeBanner: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(OpenClawChatTheme.subtleCard)
+                .fill(ClawdbotChatTheme.subtleCard)
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)))

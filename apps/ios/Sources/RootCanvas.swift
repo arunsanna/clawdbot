@@ -9,52 +9,37 @@ struct RootCanvas: View {
     @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
     @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
-    @State private var presentedSheet: PresentedSheet?
+    @AppStorage("appearance.theme") private var themeMode: String = "system"
+    @State private var showingCanvas = false
     @State private var voiceWakeToastText: String?
     @State private var toastDismissTask: Task<Void, Never>?
 
-    private enum PresentedSheet: Identifiable {
-        case settings
-        case chat
-
-        var id: Int {
-            switch self {
-            case .settings: 0
-            case .chat: 1
-            }
-        }
-    }
-
     var body: some View {
         ZStack {
-            CanvasContent(
-                systemColorScheme: self.systemColorScheme,
-                gatewayStatus: self.gatewayStatus,
-                voiceWakeEnabled: self.voiceWakeEnabled,
-                voiceWakeToastText: self.voiceWakeToastText,
-                cameraHUDText: self.appModel.cameraHUDText,
-                cameraHUDKind: self.appModel.cameraHUDKind,
-                openChat: {
-                    self.presentedSheet = .chat
-                },
-                openSettings: {
-                    self.presentedSheet = .settings
-                })
-                .preferredColorScheme(.dark)
+            // Chat is now the home screen
+            ChatHomeView(
+                viewModel: self.appModel.chatViewModel,
+                userAccent: self.appModel.seamColor,
+                themeMode: self.themeMode)
+                .preferredColorScheme(self.preferredColorScheme)
 
+            // Camera flash overlay
             if self.appModel.cameraFlashNonce != 0 {
                 CameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
             }
-        }
-        .sheet(item: self.$presentedSheet) { sheet in
-            switch sheet {
-            case .settings:
-                SettingsTab()
-            case .chat:
-                ChatSheet(
-                    gateway: self.appModel.gatewaySession,
-                    sessionKey: self.appModel.mainSessionKey,
-                    userAccent: self.appModel.seamColor)
+
+            // Voice wake toast overlay
+            if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
+                VStack {
+                    VoiceWakeToast(
+                        command: voiceWakeToastText,
+                        brighten: self.systemColorScheme == .light)
+                        .padding(.leading, 10)
+                        .safeAreaPadding(.top, 58)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .onAppear { self.updateIdleTimer() }
@@ -91,21 +76,12 @@ struct RootCanvas: View {
         }
     }
 
-    private var gatewayStatus: StatusPill.GatewayState {
-        if self.appModel.gatewayServerName != nil { return .connected }
-
-        let text = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.localizedCaseInsensitiveContains("connecting") ||
-            text.localizedCaseInsensitiveContains("reconnecting")
-        {
-            return .connecting
+    private var preferredColorScheme: ColorScheme? {
+        switch self.themeMode {
+        case "light": .light
+        case "dark": .dark
+        default: nil // system
         }
-
-        if text.localizedCaseInsensitiveContains("error") {
-            return .error
-        }
-
-        return .disconnected
     }
 
     private func updateIdleTimer() {

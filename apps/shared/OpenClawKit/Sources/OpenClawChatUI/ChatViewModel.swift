@@ -1,4 +1,4 @@
-import OpenClawKit
+import ClawdbotKit
 import Foundation
 import Observation
 import OSLog
@@ -10,28 +10,28 @@ import AppKit
 import UIKit
 #endif
 
-private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
+private let chatUILogger = Logger(subsystem: "com.clawdbot", category: "ClawdbotChatUI")
 
 @MainActor
 @Observable
-public final class OpenClawChatViewModel {
-    public private(set) var messages: [OpenClawChatMessage] = []
+public final class ClawdbotChatViewModel {
+    public private(set) var messages: [ClawdbotChatMessage] = []
     public var input: String = ""
     public var thinkingLevel: String = "off"
     public private(set) var isLoading = false
     public private(set) var isSending = false
     public private(set) var isAborting = false
     public var errorText: String?
-    public var attachments: [OpenClawPendingAttachment] = []
+    public var attachments: [ClawdbotPendingAttachment] = []
     public private(set) var healthOK: Bool = false
     public private(set) var pendingRunCount: Int = 0
 
     public private(set) var sessionKey: String
     public private(set) var sessionId: String?
     public private(set) var streamingAssistantText: String?
-    public private(set) var pendingToolCalls: [OpenClawChatPendingToolCall] = []
-    public private(set) var sessions: [OpenClawChatSessionEntry] = []
-    private let transport: any OpenClawChatTransport
+    public private(set) var pendingToolCalls: [ClawdbotChatPendingToolCall] = []
+    public private(set) var sessions: [ClawdbotChatSessionEntry] = []
+    private let transport: any ClawdbotChatTransport
 
     @ObservationIgnored
     private nonisolated(unsafe) var eventTask: Task<Void, Never>?
@@ -43,7 +43,7 @@ public final class OpenClawChatViewModel {
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
     private let pendingRunTimeoutMs: UInt64 = 120_000
 
-    private var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
+    private var pendingToolCallsById: [String: ClawdbotChatPendingToolCall] = [:] {
         didSet {
             self.pendingToolCalls = self.pendingToolCallsById.values
                 .sorted { ($0.startedAt ?? 0) < ($1.startedAt ?? 0) }
@@ -52,7 +52,7 @@ public final class OpenClawChatViewModel {
 
     private var lastHealthPollAt: Date?
 
-    public init(sessionKey: String, transport: any OpenClawChatTransport) {
+    public init(sessionKey: String, transport: any ClawdbotChatTransport) {
         self.sessionKey = sessionKey
         self.transport = transport
 
@@ -84,6 +84,7 @@ public final class OpenClawChatViewModel {
     }
 
     public func send() {
+        chatUILogger.error("[SEND] send() called")
         Task { await self.performSend() }
     }
 
@@ -99,12 +100,12 @@ public final class OpenClawChatViewModel {
         Task { await self.performSwitchSession(to: sessionKey) }
     }
 
-    public var sessionChoices: [OpenClawChatSessionEntry] {
+    public var sessionChoices: [ClawdbotChatSessionEntry] {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
         let sorted = self.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
         var seen = Set<String>()
-        var recent: [OpenClawChatSessionEntry] = []
+        var recent: [ClawdbotChatSessionEntry] = []
         for entry in sorted {
             guard !seen.contains(entry.key) else { continue }
             seen.insert(entry.key)
@@ -112,7 +113,7 @@ public final class OpenClawChatViewModel {
             recent.append(entry)
         }
 
-        var result: [OpenClawChatSessionEntry] = []
+        var result: [ClawdbotChatSessionEntry] = []
         var included = Set<String>()
         for entry in recent where !included.contains(entry.key) {
             result.append(entry)
@@ -138,18 +139,34 @@ public final class OpenClawChatViewModel {
         Task { await self.addImageAttachment(url: nil, data: data, fileName: fileName, mimeType: mimeType) }
     }
 
-    public func removeAttachment(_ id: OpenClawPendingAttachment.ID) {
+    public func removeAttachment(_ id: ClawdbotPendingAttachment.ID) {
         self.attachments.removeAll { $0.id == id }
     }
 
     public var canSend: Bool {
         let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !self.isSending && self.pendingRunCount == 0 && (!trimmed.isEmpty || !self.attachments.isEmpty)
+        let result = !self.isSending && self.pendingRunCount == 0 && (!trimmed.isEmpty || !self.attachments.isEmpty)
+        // Log periodically (every time canSend is evaluated with non-empty input)
+        if !trimmed.isEmpty {
+            chatUILogger.error("[CAN-SEND] canSend=\(result) isSending=\(self.isSending) pendingRunCount=\(self.pendingRunCount) inputLen=\(trimmed.count)")
+        }
+        return result
     }
 
     // MARK: - Internals
 
+    private var isBootstrapping = false
+
     private func bootstrap() async {
+        // Prevent concurrent bootstrap calls
+        guard !self.isBootstrapping else {
+            chatUILogger.error("[BOOTSTRAP] Skipped - already bootstrapping")
+            return
+        }
+        self.isBootstrapping = true
+        defer { self.isBootstrapping = false }
+
+        chatUILogger.error("[BOOTSTRAP] Starting bootstrap for session: \(self.sessionKey)")
         self.isLoading = true
         self.errorText = nil
         self.healthOK = false
@@ -157,38 +174,68 @@ public final class OpenClawChatViewModel {
         self.pendingToolCallsById = [:]
         self.streamingAssistantText = nil
         self.sessionId = nil
-        defer { self.isLoading = false }
+        defer {
+            self.isLoading = false
+            chatUILogger.error("[BOOTSTRAP] Complete - isLoading=false, healthOK=\(self.healthOK), errorText=\(self.errorText ?? "nil", privacy: .public)")
+        }
         do {
+            chatUILogger.error("[BOOTSTRAP] Step 1: setActiveSessionKey")
             do {
-                try await self.transport.setActiveSessionKey(self.sessionKey)
+                // Add timeout to prevent hanging - this is best-effort only
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    group.addTask {
+                        try await self.transport.setActiveSessionKey(self.sessionKey)
+                    }
+                    group.addTask {
+                        try await Task.sleep(nanoseconds: 3_000_000_000) // 3 second timeout
+                        throw CancellationError()
+                    }
+                    // Wait for first to complete
+                    try await group.next()
+                    group.cancelAll()
+                }
+                chatUILogger.error("[BOOTSTRAP] setActiveSessionKey succeeded")
             } catch {
+                chatUILogger.error("[BOOTSTRAP] setActiveSessionKey failed/timeout (best-effort): \(error.localizedDescription, privacy: .public)")
                 // Best-effort only; history/send/health still work without push events.
             }
 
+            chatUILogger.error("[BOOTSTRAP] Step 2: requestHistory")
             let payload = try await self.transport.requestHistory(sessionKey: self.sessionKey)
+            chatUILogger.error("[BOOTSTRAP] requestHistory succeeded - \(payload.messages?.count ?? 0) messages, sessionId=\(payload.sessionId ?? "nil", privacy: .public)")
             self.messages = Self.decodeMessages(payload.messages ?? [])
             self.sessionId = payload.sessionId
             if let level = payload.thinkingLevel, !level.isEmpty {
                 self.thinkingLevel = level
             }
+            chatUILogger.error("[BOOTSTRAP] Step 3: pollHealthIfNeeded")
             await self.pollHealthIfNeeded(force: true)
+            chatUILogger.error("[BOOTSTRAP] Step 4: fetchSessions")
             await self.fetchSessions(limit: 50)
             self.errorText = nil
+            chatUILogger.error("[BOOTSTRAP] All steps completed successfully")
         } catch {
             self.errorText = error.localizedDescription
-            chatUILogger.error("bootstrap failed \(error.localizedDescription, privacy: .public)")
+            chatUILogger.error("[BOOTSTRAP] FAILED: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    private static func decodeMessages(_ raw: [AnyCodable]) -> [OpenClawChatMessage] {
-        let decoded = raw.compactMap { item in
-            (try? ChatPayloadDecoding.decode(item, as: OpenClawChatMessage.self))
+    private static func decodeMessages(_ raw: [AnyCodable]) -> [ClawdbotChatMessage] {
+        let decoded = raw.compactMap { item -> ClawdbotChatMessage? in
+            do {
+                return try ChatPayloadDecoding.decode(item, as: ClawdbotChatMessage.self)
+            } catch {
+                chatUILogger.error("[DECODE] Failed to decode message: \(error.localizedDescription, privacy: .public)")
+                return nil
+            }
         }
-        return Self.dedupeMessages(decoded)
+        let deduped = Self.dedupeMessages(decoded)
+        chatUILogger.error("[DECODE] raw=\(raw.count) decoded=\(decoded.count) deduped=\(deduped.count)")
+        return deduped
     }
 
-    private static func dedupeMessages(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
-        var result: [OpenClawChatMessage] = []
+    private static func dedupeMessages(_ messages: [ClawdbotChatMessage]) -> [ClawdbotChatMessage] {
+        var result: [ClawdbotChatMessage] = []
         result.reserveCapacity(messages.count)
         var seen = Set<String>()
 
@@ -205,7 +252,7 @@ public final class OpenClawChatViewModel {
         return result
     }
 
-    private static func dedupeKey(for message: OpenClawChatMessage) -> String? {
+    private static func dedupeKey(for message: ClawdbotChatMessage) -> String? {
         guard let timestamp = message.timestamp else { return nil }
         let text = message.content.compactMap(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -214,14 +261,24 @@ public final class OpenClawChatViewModel {
     }
 
     private func performSend() async {
-        guard !self.isSending else { return }
-        let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !self.attachments.isEmpty else { return }
-
-        guard self.healthOK else {
-            self.errorText = "Gateway health not OK; cannot send"
+        chatUILogger.error("[SEND] performSend called - isSending=\(self.isSending), input='\(self.input.prefix(50), privacy: .public)', healthOK=\(self.healthOK)")
+        guard !self.isSending else {
+            chatUILogger.error("[SEND] BLOCKED: already sending")
             return
         }
+        let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !self.attachments.isEmpty else {
+            chatUILogger.error("[SEND] BLOCKED: input empty and no attachments")
+            return
+        }
+
+        // Note: We used to block on healthOK, but this caused sends to fail when
+        // the health check times out even though the gateway is actually connected.
+        // Now we just warn but allow the send to proceed.
+        if !self.healthOK {
+            chatUILogger.error("[SEND] Warning: healthOK=false, but proceeding anyway")
+        }
+        chatUILogger.error("[SEND] Proceeding with send: '\(trimmed.prefix(50), privacy: .public)'")
 
         self.isSending = true
         self.errorText = nil
@@ -233,8 +290,8 @@ public final class OpenClawChatViewModel {
         self.streamingAssistantText = nil
 
         // Optimistically append user message to UI.
-        var userContent: [OpenClawChatMessageContent] = [
-            OpenClawChatMessageContent(
+        var userContent: [ClawdbotChatMessageContent] = [
+            ClawdbotChatMessageContent(
                 type: "text",
                 text: messageText,
                 thinking: nil,
@@ -246,8 +303,8 @@ public final class OpenClawChatViewModel {
                 name: nil,
                 arguments: nil),
         ]
-        let encodedAttachments = self.attachments.map { att -> OpenClawChatAttachmentPayload in
-            OpenClawChatAttachmentPayload(
+        let encodedAttachments = self.attachments.map { att -> ClawdbotChatAttachmentPayload in
+            ClawdbotChatAttachmentPayload(
                 type: att.type,
                 mimeType: att.mimeType,
                 fileName: att.fileName,
@@ -255,7 +312,7 @@ public final class OpenClawChatViewModel {
         }
         for att in encodedAttachments {
             userContent.append(
-                OpenClawChatMessageContent(
+                ClawdbotChatMessageContent(
                     type: att.type,
                     text: nil,
                     thinking: nil,
@@ -268,7 +325,7 @@ public final class OpenClawChatViewModel {
                     arguments: nil))
         }
         self.messages.append(
-            OpenClawChatMessage(
+            ClawdbotChatMessage(
                 id: UUID(),
                 role: "user",
                 content: userContent,
@@ -332,8 +389,8 @@ public final class OpenClawChatViewModel {
         await self.bootstrap()
     }
 
-    private func placeholderSession(key: String) -> OpenClawChatSessionEntry {
-        OpenClawChatSessionEntry(
+    private func placeholderSession(key: String) -> ClawdbotChatSessionEntry {
+        ClawdbotChatSessionEntry(
             key: key,
             kind: nil,
             displayName: nil,
@@ -354,7 +411,7 @@ public final class OpenClawChatViewModel {
             contextTokens: nil)
     }
 
-    private func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
+    private func handleTransportEvent(_ evt: ClawdbotChatTransportEvent) {
         switch evt {
         case let .health(ok):
             self.healthOK = ok
@@ -370,7 +427,7 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private func handleChatEvent(_ chat: OpenClawChatEventPayload) {
+    private func handleChatEvent(_ chat: ClawdbotChatEventPayload) {
         if let sessionKey = chat.sessionKey, sessionKey != self.sessionKey {
             return
         }
@@ -407,7 +464,7 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {
+    private func handleAgentEvent(_ evt: ClawdbotAgentEventPayload) {
         if let sessionId, evt.runId != sessionId {
             return
         }
@@ -423,7 +480,7 @@ public final class OpenClawChatViewModel {
             guard let toolCallId = evt.data["toolCallId"]?.value as? String else { return }
             if phase == "start" {
                 let args = evt.data["args"]
-                self.pendingToolCallsById[toolCallId] = OpenClawChatPendingToolCall(
+                self.pendingToolCallsById[toolCallId] = ClawdbotChatPendingToolCall(
                     toolCallId: toolCallId,
                     name: name,
                     args: args,
@@ -438,15 +495,15 @@ public final class OpenClawChatViewModel {
     }
 
     private func refreshHistoryAfterRun() async {
+        chatUILogger.error("[REFRESH] Fetching history after run, sessionKey=\(self.sessionKey)")
         do {
             let payload = try await self.transport.requestHistory(sessionKey: self.sessionKey)
+            chatUILogger.error("[REFRESH] Got sessionId=\(payload.sessionId ?? "nil", privacy: .public), raw messages=\(payload.messages?.count ?? 0)")
             self.messages = Self.decodeMessages(payload.messages ?? [])
             self.sessionId = payload.sessionId
-            if let level = payload.thinkingLevel, !level.isEmpty {
-                self.thinkingLevel = level
-            }
+            chatUILogger.error("[REFRESH] Updated with \(self.messages.count) messages")
         } catch {
-            chatUILogger.error("refresh history failed \(error.localizedDescription, privacy: .public)")
+            chatUILogger.error("[REFRESH] Failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -483,13 +540,17 @@ public final class OpenClawChatViewModel {
 
     private func pollHealthIfNeeded(force: Bool) async {
         if !force, let last = self.lastHealthPollAt, Date().timeIntervalSince(last) < 10 {
+            chatUILogger.error("[HEALTH-POLL] Skipped - polled \(Date().timeIntervalSince(last))s ago")
             return
         }
         self.lastHealthPollAt = Date()
+        chatUILogger.error("[HEALTH-POLL] Starting health check (force=\(force), timeout=15000ms)")
         do {
-            let ok = try await self.transport.requestHealth(timeoutMs: 5000)
+            let ok = try await self.transport.requestHealth(timeoutMs: 15000)
+            chatUILogger.error("[HEALTH-POLL] Health check succeeded: ok=\(ok)")
             self.healthOK = ok
         } catch {
+            chatUILogger.error("[HEALTH-POLL] Health check FAILED: \(error.localizedDescription, privacy: .public)")
             self.healthOK = false
         }
     }
@@ -534,7 +595,7 @@ public final class OpenClawChatViewModel {
 
         let preview = Self.previewImage(data: data)
         self.attachments.append(
-            OpenClawPendingAttachment(
+            ClawdbotPendingAttachment(
                 url: url,
                 data: data,
                 fileName: fileName,
@@ -542,7 +603,7 @@ public final class OpenClawChatViewModel {
                 preview: preview))
     }
 
-    private static func previewImage(data: Data) -> OpenClawPlatformImage? {
+    private static func previewImage(data: Data) -> ClawdbotPlatformImage? {
         #if canImport(AppKit)
         NSImage(data: data)
         #elseif canImport(UIKit)

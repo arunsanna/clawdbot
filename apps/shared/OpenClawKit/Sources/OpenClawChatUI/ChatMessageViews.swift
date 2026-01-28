@@ -1,4 +1,4 @@
-import OpenClawKit
+import ClawdbotKit
 import Foundation
 import SwiftUI
 
@@ -135,8 +135,8 @@ private struct ChatBubbleShape: InsettableShape {
 
 @MainActor
 struct ChatMessageBubble: View {
-    let message: OpenClawChatMessage
-    let style: OpenClawChatView.Style
+    let message: ClawdbotChatMessage
+    let style: ClawdbotChatView.Style
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
 
@@ -157,15 +157,40 @@ struct ChatMessageBubble: View {
 
 @MainActor
 private struct ChatMessageBody: View {
-    let message: OpenClawChatMessage
+    @Environment(\.colorScheme) private var colorScheme
+    let message: ClawdbotChatMessage
     let isUser: Bool
-    let style: OpenClawChatView.Style
+    let style: ClawdbotChatView.Style
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
 
+    private var isDark: Bool { self.colorScheme == .dark }
+
+    private var isLiquidGlass: Bool {
+        #if os(macOS)
+        false
+        #else
+        if case .liquidGlass = self.style { return true }
+        return false
+        #endif
+    }
+
+    private var textColor: Color {
+        if self.isLiquidGlass {
+            // Adaptive liquid glass: invert colors based on color scheme
+            // Dark mode: user cyan, assistant white
+            // Light mode: user accent/blue, assistant black
+            if self.isUser {
+                return self.userAccent ?? (self.isDark ? Color(red: 0.4, green: 0.85, blue: 1.0) : .blue)
+            } else {
+                return self.isDark ? .white : .black
+            }
+        }
+        return self.isUser ? ClawdbotChatTheme.userText : ClawdbotChatTheme.assistantText
+    }
+
     var body: some View {
         let text = self.primaryText
-        let textColor = self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText
 
         VStack(alignment: .leading, spacing: 10) {
             if self.isToolResultMessage {
@@ -173,22 +198,27 @@ private struct ChatMessageBody: View {
                     ToolResultCard(
                         title: self.toolResultTitle,
                         text: text,
-                        isUser: self.isUser)
+                        isUser: self.isUser,
+                        isLiquidGlass: self.isLiquidGlass)
                 }
             } else if self.isUser {
                 ChatMarkdownRenderer(
                     text: text,
-                    context: .user,
+                    context: self.isLiquidGlass ? .liquidGlassUser : .user,
                     variant: self.markdownVariant,
                     font: .system(size: 14),
-                    textColor: textColor)
+                    textColor: self.textColor)
             } else {
-                ChatAssistantTextBody(text: text, markdownVariant: self.markdownVariant)
+                ChatAssistantTextBody(
+                    text: text,
+                    markdownVariant: self.markdownVariant,
+                    textColor: self.textColor,
+                    isLiquidGlass: self.isLiquidGlass)
             }
 
             if !self.inlineAttachments.isEmpty {
                 ForEach(self.inlineAttachments.indices, id: \.self) { idx in
-                    AttachmentRow(att: self.inlineAttachments[idx], isUser: self.isUser)
+                    AttachmentRow(att: self.inlineAttachments[idx], isUser: self.isUser, isLiquidGlass: self.isLiquidGlass, userAccent: self.userAccent)
                 }
             }
 
@@ -196,7 +226,8 @@ private struct ChatMessageBody: View {
                 ForEach(self.toolCalls.indices, id: \.self) { idx in
                     ToolCallCard(
                         content: self.toolCalls[idx],
-                        isUser: self.isUser)
+                        isUser: self.isUser,
+                        isLiquidGlass: self.isLiquidGlass)
                 }
             }
 
@@ -207,14 +238,15 @@ private struct ChatMessageBody: View {
                     ToolResultCard(
                         title: "\(display.emoji) \(display.title)",
                         text: toolResult.text ?? "",
-                        isUser: self.isUser)
+                        isUser: self.isUser,
+                        isLiquidGlass: self.isLiquidGlass)
                 }
             }
         }
         .textSelection(.enabled)
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
-        .foregroundStyle(textColor)
+        .foregroundStyle(self.textColor)
         .background(self.bubbleBackground)
         .clipShape(self.bubbleShape)
         .overlay(self.bubbleBorder)
@@ -232,7 +264,7 @@ private struct ChatMessageBody: View {
         return parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var inlineAttachments: [OpenClawChatMessageContent] {
+    private var inlineAttachments: [ClawdbotChatMessageContent] {
         self.message.content.filter { content in
             switch content.type ?? "text" {
             case "file", "attachment":
@@ -243,7 +275,7 @@ private struct ChatMessageBody: View {
         }
     }
 
-    private var toolCalls: [OpenClawChatMessageContent] {
+    private var toolCalls: [ClawdbotChatMessageContent] {
         self.message.content.filter { content in
             let kind = (content.type ?? "").lowercased()
             if ["toolcall", "tool_call", "tooluse", "tool_use"].contains(kind) {
@@ -253,7 +285,7 @@ private struct ChatMessageBody: View {
         }
     }
 
-    private var inlineToolResults: [OpenClawChatMessageContent] {
+    private var inlineToolResults: [ClawdbotChatMessageContent] {
         self.message.content.filter { content in
             let kind = (content.type ?? "").lowercased()
             return kind == "toolresult" || kind == "tool_result"
@@ -275,13 +307,17 @@ private struct ChatMessageBody: View {
     }
 
     private var bubbleFillColor: Color {
+        if self.isLiquidGlass {
+            // True liquid glass: completely transparent, no background
+            return .clear
+        }
         if self.isUser {
-            return self.userAccent ?? OpenClawChatTheme.userBubble
+            return self.userAccent ?? ClawdbotChatTheme.userBubble
         }
         if self.style == .onboarding {
-            return OpenClawChatTheme.onboardingAssistantBubble
+            return ClawdbotChatTheme.onboardingAssistantBubble
         }
-        return OpenClawChatTheme.assistantBubble
+        return ClawdbotChatTheme.assistantBubble
     }
 
     private var bubbleBackground: AnyShapeStyle {
@@ -289,16 +325,24 @@ private struct ChatMessageBody: View {
     }
 
     private var bubbleBorderColor: Color {
+        if self.isLiquidGlass {
+            // True liquid glass: no borders
+            return .clear
+        }
         if self.isUser {
             return Color.white.opacity(0.12)
         }
         if self.style == .onboarding {
-            return OpenClawChatTheme.onboardingAssistantBorder
+            return ClawdbotChatTheme.onboardingAssistantBorder
         }
         return Color.white.opacity(0.08)
     }
 
     private var bubbleBorderWidth: CGFloat {
+        if self.isLiquidGlass {
+            // True liquid glass: no borders
+            return 0
+        }
         if self.isUser { return 0.5 }
         if self.style == .onboarding { return 0.8 }
         return 1
@@ -339,50 +383,97 @@ private struct ChatMessageBody: View {
 }
 
 private struct AttachmentRow: View {
-    let att: OpenClawChatMessageContent
+    let att: ClawdbotChatMessageContent
     let isUser: Bool
+    var isLiquidGlass: Bool = false
+    var userAccent: Color?
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var isDark: Bool { self.colorScheme == .dark }
+
+    private var textColor: Color {
+        if self.isLiquidGlass {
+            // Adaptive liquid glass
+            if self.isUser {
+                return self.userAccent ?? (self.isDark ? Color(red: 0.4, green: 0.85, blue: 1.0) : .blue)
+            }
+            return self.isDark ? .white : .black
+        }
+        return self.isUser ? ClawdbotChatTheme.userText : ClawdbotChatTheme.assistantText
+    }
+
+    private var cardBackground: Color {
+        if self.isLiquidGlass {
+            return self.isDark ? Color.white.opacity(0.1) : Color.black.opacity(0.06)
+        }
+        return self.isUser ? Color.white.opacity(0.2) : Color.black.opacity(0.04)
+    }
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "paperclip")
+                .foregroundStyle(self.textColor)
             Text(self.att.fileName ?? "Attachment")
                 .font(.footnote)
                 .lineLimit(1)
-                .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
+                .foregroundStyle(self.textColor)
             Spacer()
         }
         .padding(10)
-        .background(self.isUser ? Color.white.opacity(0.2) : Color.black.opacity(0.04))
+        .background(self.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
 private struct ToolCallCard: View {
-    let content: OpenClawChatMessageContent
+    let content: ClawdbotChatMessageContent
     let isUser: Bool
+    var isLiquidGlass: Bool = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var isDark: Bool { self.colorScheme == .dark }
+
+    private var cardFill: AnyShapeStyle {
+        if self.isLiquidGlass {
+            return AnyShapeStyle(self.isDark ? Color.white.opacity(0.1) : Color.black.opacity(0.06))
+        }
+        return ClawdbotChatTheme.subtleCard
+    }
+
+    private var cardStroke: Color {
+        if self.isLiquidGlass {
+            return self.isDark ? Color.white.opacity(0.15) : Color.black.opacity(0.1)
+        }
+        return Color.white.opacity(0.08)
+    }
+
+    private var textColor: Color {
+        self.isLiquidGlass ? (self.isDark ? .white : .black) : .primary
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(self.toolName)
                     .font(.footnote.weight(.semibold))
+                    .foregroundStyle(self.textColor)
                 Spacer(minLength: 0)
             }
 
             if let summary = self.summary, !summary.isEmpty {
                 Text(summary)
                     .font(.footnote.monospaced())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.isLiquidGlass ? (self.isDark ? Color.white.opacity(0.7) : Color.black.opacity(0.6)) : .secondary)
                     .lineLimit(2)
             }
         }
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(OpenClawChatTheme.subtleCard)
+                .fill(self.cardFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
+                        .strokeBorder(self.cardStroke, lineWidth: 1)))
     }
 
     private var toolName: String {
@@ -402,7 +493,32 @@ private struct ToolResultCard: View {
     let title: String
     let text: String
     let isUser: Bool
+    var isLiquidGlass: Bool = false
     @State private var expanded = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var isDark: Bool { self.colorScheme == .dark }
+
+    private var textColor: Color {
+        if self.isLiquidGlass {
+            return self.isDark ? .white : .black
+        }
+        return self.isUser ? ClawdbotChatTheme.userText : ClawdbotChatTheme.assistantText
+    }
+
+    private var cardFill: AnyShapeStyle {
+        if self.isLiquidGlass {
+            return AnyShapeStyle(self.isDark ? Color.white.opacity(0.1) : Color.black.opacity(0.06))
+        }
+        return ClawdbotChatTheme.subtleCard
+    }
+
+    private var cardStroke: Color {
+        if self.isLiquidGlass {
+            return self.isDark ? Color.white.opacity(0.15) : Color.black.opacity(0.1)
+        }
+        return Color.white.opacity(0.08)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -414,7 +530,7 @@ private struct ToolResultCard: View {
 
             Text(self.displayText)
                 .font(.footnote.monospaced())
-                .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
+                .foregroundStyle(self.textColor)
                 .lineLimit(self.expanded ? nil : Self.previewLineLimit)
 
             if self.shouldShowToggle {
@@ -429,10 +545,10 @@ private struct ToolResultCard: View {
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(OpenClawChatTheme.subtleCard)
+                .fill(self.cardFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
+                        .strokeBorder(self.cardStroke, lineWidth: 1)))
     }
 
     private static let previewLineLimit = 8
@@ -453,13 +569,37 @@ private struct ToolResultCard: View {
 
 @MainActor
 struct ChatTypingIndicatorBubble: View {
-    let style: OpenClawChatView.Style
+    let style: ClawdbotChatView.Style
+
+    private var isLiquidGlass: Bool {
+        #if os(macOS)
+        false
+        #else
+        if case .liquidGlass = self.style { return true }
+        return false
+        #endif
+    }
 
     var body: some View {
+        #if os(macOS)
+        self.standardBody
+        #else
+        if self.isLiquidGlass {
+            // Liquid glass: just dots, no bubble
+            TypingDots(isLiquidGlass: true)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+        } else {
+            self.standardBody
+        }
+        #endif
+    }
+
+    private var standardBody: some View {
         HStack(spacing: 10) {
-            TypingDots()
+            TypingDots(isLiquidGlass: false)
             if self.style == .standard {
-                Text("OpenClaw is thinking…")
+                Text("Clawd is thinking…")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -469,7 +609,7 @@ struct ChatTypingIndicatorBubble: View {
         .padding(.horizontal, self.style == .standard ? 12 : 14)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(OpenClawChatTheme.assistantBubble))
+                .fill(ClawdbotChatTheme.assistantBubble))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
@@ -488,18 +628,68 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
 struct ChatStreamingAssistantBubble: View {
     let text: String
     let markdownVariant: ChatMarkdownVariant
+    var style: ClawdbotChatView.Style = .standard
+
+    private var isLiquidGlass: Bool {
+        #if os(macOS)
+        false
+        #else
+        if case .liquidGlass = self.style { return true }
+        return false
+        #endif
+    }
+
+    private var bubbleFill: Color {
+        #if os(macOS)
+        ClawdbotChatTheme.assistantBubble
+        #else
+        if case .liquidGlass = self.style {
+            return .clear // True liquid glass: no background
+        }
+        return ClawdbotChatTheme.assistantBubble
+        #endif
+    }
+
+    private var bubbleStroke: Color {
+        #if os(macOS)
+        Color.white.opacity(0.08)
+        #else
+        if case .liquidGlass = self.style {
+            return .clear // True liquid glass: no border
+        }
+        return Color.white.opacity(0.08)
+        #endif
+    }
+
+    @Environment(\.colorScheme) private var colorScheme
+    private var isDark: Bool { self.colorScheme == .dark }
+
+    private var textColor: Color {
+        #if os(macOS)
+        ClawdbotChatTheme.assistantText
+        #else
+        if case .liquidGlass = self.style {
+            return self.isDark ? .white : .black // Adaptive liquid glass
+        }
+        return ClawdbotChatTheme.assistantText
+        #endif
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ChatAssistantTextBody(text: self.text, markdownVariant: self.markdownVariant)
+            ChatAssistantTextBody(
+                text: self.text,
+                markdownVariant: self.markdownVariant,
+                textColor: self.textColor,
+                isLiquidGlass: self.isLiquidGlass)
         }
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(OpenClawChatTheme.assistantBubble))
+                .fill(self.bubbleFill))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+                .strokeBorder(self.bubbleStroke, lineWidth: 1))
         .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
         .focusable(false)
     }
@@ -507,13 +697,59 @@ struct ChatStreamingAssistantBubble: View {
 
 @MainActor
 struct ChatPendingToolsBubble: View {
-    let toolCalls: [OpenClawChatPendingToolCall]
+    let toolCalls: [ClawdbotChatPendingToolCall]
+    var style: ClawdbotChatView.Style = .standard
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var isDark: Bool { self.colorScheme == .dark }
+
+    private var isLiquidGlass: Bool {
+        #if os(macOS)
+        false
+        #else
+        if case .liquidGlass = self.style { return true }
+        return false
+        #endif
+    }
+
+    private var bubbleFill: Color {
+        #if os(macOS)
+        ClawdbotChatTheme.assistantBubble
+        #else
+        if case .liquidGlass = self.style {
+            return .clear // Liquid glass: no background
+        }
+        return ClawdbotChatTheme.assistantBubble
+        #endif
+    }
+
+    private var bubbleStroke: Color {
+        #if os(macOS)
+        Color.white.opacity(0.08)
+        #else
+        if case .liquidGlass = self.style {
+            return .clear // Liquid glass: no border
+        }
+        return Color.white.opacity(0.08)
+        #endif
+    }
+
+    private var textColor: Color {
+        #if os(macOS)
+        ClawdbotChatTheme.assistantText
+        #else
+        if case .liquidGlass = self.style {
+            return self.isDark ? .white : .black // Adaptive liquid glass
+        }
+        return ClawdbotChatTheme.assistantText
+        #endif
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Running tools…", systemImage: "hammer")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.textColor.opacity(0.6))
 
             ForEach(self.toolCalls) { call in
                 let display = ToolDisplayRegistry.resolve(name: call.name, args: call.args)
@@ -521,29 +757,31 @@ struct ChatPendingToolsBubble: View {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("\(display.emoji) \(display.label)")
                             .font(.footnote.monospaced())
+                            .foregroundStyle(self.textColor)
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         ProgressView().controlSize(.mini)
+                            .tint(self.isLiquidGlass ? .white : nil)
                     }
                     if let detail = display.detailLine, !detail.isEmpty {
                         Text(detail)
                             .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(self.textColor.opacity(0.6))
                             .lineLimit(2)
                     }
                 }
                 .padding(10)
-                .background(Color.white.opacity(0.06))
+                .background(self.isLiquidGlass ? (self.isDark ? Color.white.opacity(0.1) : Color.black.opacity(0.06)) : self.textColor.opacity(0.06))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(OpenClawChatTheme.assistantBubble))
+                .fill(self.bubbleFill))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+                .strokeBorder(self.bubbleStroke, lineWidth: 1))
         .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
         .focusable(false)
     }
@@ -551,53 +789,77 @@ struct ChatPendingToolsBubble: View {
 
 extension ChatPendingToolsBubble: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.toolCalls == rhs.toolCalls
+        lhs.toolCalls == rhs.toolCalls && lhs.style == rhs.style
     }
 }
 
 @MainActor
 private struct TypingDots: View {
+    var isLiquidGlass: Bool = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
-    @State private var animate = false
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var visibleCount: Int = 1
+    @State private var timerTask: Task<Void, Never>?
+
+    private var isDark: Bool { self.colorScheme == .dark }
+
+    private var dotColor: Color {
+        if self.isLiquidGlass {
+            return self.isDark ? Color.white.opacity(0.7) : Color.black.opacity(0.5)
+        }
+        return Color.secondary.opacity(0.6)
+    }
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             ForEach(0..<3, id: \.self) { idx in
                 Circle()
-                    .fill(Color.secondary.opacity(0.55))
-                    .frame(width: 7, height: 7)
-                    .scaleEffect(self.reduceMotion ? 0.85 : (self.animate ? 1.05 : 0.70))
-                    .opacity(self.reduceMotion ? 0.55 : (self.animate ? 0.95 : 0.30))
-                    .animation(
-                        self.reduceMotion ? nil : .easeInOut(duration: 0.55)
-                            .repeatForever(autoreverses: true)
-                            .delay(Double(idx) * 0.16),
-                        value: self.animate)
+                    .fill(self.dotColor)
+                    .frame(width: 6, height: 6)
+                    .opacity(idx < self.visibleCount ? 1.0 : 0.0)
             }
         }
-        .onAppear { self.updateAnimationState() }
-        .onDisappear { self.animate = false }
-        .onChange(of: self.scenePhase) { _, _ in
-            self.updateAnimationState()
-        }
-        .onChange(of: self.reduceMotion) { _, _ in
-            self.updateAnimationState()
+        .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.15), value: self.visibleCount)
+        .onAppear { self.startAnimation() }
+        .onDisappear { self.stopAnimation() }
+        .onChange(of: self.scenePhase) { _, phase in
+            if phase == .active {
+                self.startAnimation()
+            } else {
+                self.stopAnimation()
+            }
         }
     }
 
-    private func updateAnimationState() {
-        guard !self.reduceMotion, self.scenePhase == .active else {
-            self.animate = false
+    private func startAnimation() {
+        guard !self.reduceMotion else {
+            self.visibleCount = 3
             return
         }
-        self.animate = true
+        self.stopAnimation()
+        self.timerTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 400_000_000) // 0.4s per step
+                if Task.isCancelled { break }
+                await MainActor.run {
+                    self.visibleCount = (self.visibleCount % 3) + 1
+                }
+            }
+        }
+    }
+
+    private func stopAnimation() {
+        self.timerTask?.cancel()
+        self.timerTask = nil
     }
 }
 
 private struct ChatAssistantTextBody: View {
     let text: String
     let markdownVariant: ChatMarkdownVariant
+    var textColor: Color = ClawdbotChatTheme.assistantText
+    var isLiquidGlass: Bool = false
 
     var body: some View {
         let segments = AssistantTextParser.segments(from: self.text)
@@ -606,10 +868,10 @@ private struct ChatAssistantTextBody: View {
                 let font = segment.kind == .thinking ? Font.system(size: 14).italic() : Font.system(size: 14)
                 ChatMarkdownRenderer(
                     text: segment.text,
-                    context: .assistant,
+                    context: self.isLiquidGlass ? .liquidGlassAssistant : .assistant,
                     variant: self.markdownVariant,
                     font: font,
-                    textColor: OpenClawChatTheme.assistantText)
+                    textColor: self.textColor)
             }
         }
     }

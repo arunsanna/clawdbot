@@ -34,6 +34,7 @@ struct SettingsTab: View {
     @AppStorage("gateway.manual.tls") private var manualGatewayTLS: Bool = true
     @AppStorage("gateway.discovery.debugLogs") private var discoveryDebugLogsEnabled: Bool = false
     @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
+    @AppStorage("appearance.theme") private var themeMode: String = "system"
     @State private var connectStatus = ConnectStatusStore()
     @State private var connectingGatewayID: String?
     @State private var localIPAddress: String?
@@ -211,7 +212,14 @@ struct SettingsTab: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section("Screen") {
+                Section("Appearance") {
+                    Picker("Theme", selection: self.$themeMode) {
+                        Text("System").tag("system")
+                        Text("Light").tag("light")
+                        Text("Dark").tag("dark")
+                    }
+                    .pickerStyle(.segmented)
+
                     Toggle("Prevent Sleep", isOn: self.$preventSleep)
                     Text("Keeps the screen awake while OpenClaw is open.")
                         .font(.footnote)

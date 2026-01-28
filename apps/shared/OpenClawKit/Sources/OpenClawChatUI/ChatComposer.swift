@@ -8,9 +8,10 @@ import UniformTypeIdentifiers
 #endif
 
 @MainActor
-struct OpenClawChatComposer: View {
-    @Bindable var viewModel: OpenClawChatViewModel
-    let style: OpenClawChatView.Style
+struct ClawdbotChatComposer: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Bindable var viewModel: ClawdbotChatViewModel
+    let style: ClawdbotChatView.Style
     let showsSessionSwitcher: Bool
 
     #if !os(macOS)
@@ -20,7 +21,48 @@ struct OpenClawChatComposer: View {
     @State private var shouldFocusTextView = false
     #endif
 
+    private var isDark: Bool { self.colorScheme == .dark }
+
+    private var isLiquidGlass: Bool {
+        #if os(macOS)
+        false
+        #else
+        if case .liquidGlass = self.style { return true }
+        return false
+        #endif
+    }
+
+    // Theme-adaptive colors for liquid glass
+    private var glassColor: Color { self.isDark ? .white : .black }
+    private var glassOpacity: Double { self.isDark ? 0.1 : 0.06 }
+    private var borderOpacity: Double { self.isDark ? 0.2 : 0.12 }
+    private var foregroundColor: Color { self.isDark ? .white : .primary }
+    private var inputBackground: Double { self.isDark ? 0.08 : 0.04 }
+    private var separatorColor: Color { self.isDark ? .white.opacity(0.15) : .black.opacity(0.1) }
+
+    private var thinkingIcon: String {
+        switch self.viewModel.thinkingLevel {
+        case "high": "brain.head.profile.fill"
+        case "medium": "brain.fill"
+        case "low": "brain"
+        default: "lightbulb.slash"
+        }
+    }
+
     var body: some View {
+        #if !os(macOS)
+        if self.isLiquidGlass {
+            self.liquidGlassComposer
+        } else {
+            self.standardComposer
+        }
+        #else
+        self.standardComposer
+        #endif
+    }
+
+    @ViewBuilder
+    private var standardComposer: some View {
         VStack(alignment: .leading, spacing: 4) {
             if self.showsToolbar {
                 HStack(spacing: 6) {
@@ -54,21 +96,21 @@ struct OpenClawChatComposer: View {
                         topTrailing: 0),
                     style: .continuous)
                 shape
-                    .fill(OpenClawChatTheme.composerBackground)
-                    .overlay(shape.strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
+                    .fill(ClawdbotChatTheme.composerBackground)
+                    .overlay(shape.strokeBorder(ClawdbotChatTheme.composerBorder, lineWidth: 1))
                     .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
             } else {
                 let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 shape
-                    .fill(OpenClawChatTheme.composerBackground)
-                    .overlay(shape.strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
+                    .fill(ClawdbotChatTheme.composerBackground)
+                    .overlay(shape.strokeBorder(ClawdbotChatTheme.composerBorder, lineWidth: 1))
                     .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
             }
             #else
             let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             shape
-                .fill(OpenClawChatTheme.composerBackground)
-                .overlay(shape.strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
+                .fill(ClawdbotChatTheme.composerBackground)
+                .overlay(shape.strokeBorder(ClawdbotChatTheme.composerBorder, lineWidth: 1))
                 .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
             #endif
         }
@@ -81,6 +123,76 @@ struct OpenClawChatComposer: View {
         }
         #endif
     }
+
+    #if !os(macOS)
+    @ViewBuilder
+    private var liquidGlassComposer: some View {
+        HStack(spacing: 8) {
+            // Thinking level menu (36x36)
+            Menu {
+                Picker("Thinking", selection: self.$viewModel.thinkingLevel) {
+                    Label("Off", systemImage: "brain").tag("off")
+                    Label("Low", systemImage: "brain").tag("low")
+                    Label("Medium", systemImage: "brain.fill").tag("medium")
+                    Label("High", systemImage: "brain.head.profile.fill").tag("high")
+                }
+            } label: {
+                Image(systemName: self.thinkingIcon)
+                    .font(.system(size: 18))
+                    .foregroundStyle(self.foregroundColor)
+            }
+            .frame(width: 36, height: 36)
+            .background(Circle().fill(self.glassColor.opacity(self.glassOpacity)))
+            .overlay(Circle().strokeBorder(self.glassColor.opacity(self.borderOpacity)))
+
+            // Text field
+            TextField("Type a message...", text: self.$viewModel.input)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(self.foregroundColor)
+                .padding(.horizontal, 14)
+                .frame(height: 40)
+                .background(Capsule().fill(self.glassColor.opacity(self.inputBackground)))
+                .overlay(Capsule().strokeBorder(self.glassColor.opacity(self.borderOpacity)))
+                .focused(self.$isFocused)
+
+            // Attachment button (36x36) - modern plus icon
+            PhotosPicker(selection: self.$pickerItems, matching: .images) {
+                Image(systemName: "plus")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(self.foregroundColor)
+            }
+            .frame(width: 36, height: 36)
+            .background(Circle().fill(self.glassColor.opacity(self.glassOpacity)))
+            .overlay(Circle().strokeBorder(self.glassColor.opacity(self.borderOpacity)))
+            .onChange(of: self.pickerItems) { _, newItems in
+                Task { await self.loadPhotosPickerItems(newItems) }
+            }
+
+            // Send button (40x40) - modern arrow icon
+            Button {
+                self.viewModel.send()
+            } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(self.isDark ? .black : .white)
+            }
+            .frame(width: 40, height: 40)
+            .background(Circle().fill(self.isDark ? .white : .accentColor))
+            .disabled(!self.viewModel.canSend)
+            .opacity(self.viewModel.canSend ? 1 : 0.5)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .padding(.bottom, 10)
+        .background(self.isDark ? Color.black : Color(uiColor: .systemBackground))
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(self.separatorColor)
+                .frame(height: 1)
+        }
+    }
+    #endif
 
     private var thinkingPicker: some View {
         Picker("Thinking", selection: self.$viewModel.thinkingLevel) {
@@ -144,11 +256,11 @@ struct OpenClawChatComposer: View {
             HStack(spacing: 6) {
                 ForEach(
                     self.viewModel.attachments,
-                    id: \OpenClawPendingAttachment.id)
-                { (att: OpenClawPendingAttachment) in
+                    id: \ClawdbotPendingAttachment.id)
+                { (att: ClawdbotPendingAttachment) in
                     HStack(spacing: 6) {
                         if let img = att.preview {
-                            OpenClawPlatformImageFactory.image(img)
+                            ClawdbotPlatformImageFactory.image(img)
                                 .resizable()
                                 .scaledToFill()
                                 .frame(width: 22, height: 22)
@@ -181,7 +293,7 @@ struct OpenClawChatComposer: View {
             self.editorOverlay
 
             Rectangle()
-                .fill(OpenClawChatTheme.divider)
+                .fill(ClawdbotChatTheme.divider)
                 .frame(height: 1)
                 .padding(.horizontal, 2)
 
@@ -197,10 +309,10 @@ struct OpenClawChatComposer: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(OpenClawChatTheme.composerField)
+                .fill(ClawdbotChatTheme.composerField)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(OpenClawChatTheme.composerBorder)))
+                        .strokeBorder(ClawdbotChatTheme.composerBorder)))
         .padding(self.editorPadding)
     }
 
@@ -217,7 +329,7 @@ struct OpenClawChatComposer: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(OpenClawChatTheme.subtleCard)
+        .background(ClawdbotChatTheme.subtleCard)
         .clipShape(Capsule())
     }
 
@@ -230,7 +342,7 @@ struct OpenClawChatComposer: View {
     private var editorOverlay: some View {
         ZStack(alignment: .topLeading) {
             if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("Message OpenClaw…")
+                Text("Message Clawd…")
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 4)
