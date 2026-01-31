@@ -7,6 +7,7 @@ import {
   channelsLogsCommand,
   channelsRemoveCommand,
   channelsResolveCommand,
+  channelsRestartCommand,
   channelsStatusCommand,
 } from "../commands/channels.js";
 import { danger } from "../globals.js";
@@ -243,5 +244,24 @@ export function registerChannelsCli(program: Command) {
           defaultRuntime,
         );
       }, "Channel logout failed");
+    });
+
+  channels
+    .command("restart")
+    .description("Restart a channel's polling/connection")
+    .requiredOption("--channel <name>", `Channel to restart (${channelNames})`)
+    .option("--account <id>", "Specific account ID (optional)")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runChannelsCommandWithDanger(async () => {
+        await channelsRestartCommand(
+          {
+            channel: opts.channel as string,
+            account: opts.account as string | undefined,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      }, "Channel restart failed");
     });
 }

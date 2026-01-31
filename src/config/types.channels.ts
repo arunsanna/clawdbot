@@ -17,10 +17,27 @@ export type ChannelHeartbeatVisibilityConfig = {
   useIndicator?: boolean;
 };
 
+/**
+ * Auto-restart config for channels that stop due to recoverable errors.
+ * Enabled by default with sensible defaults matching web reconnect behavior.
+ */
+export type ChannelAutoRestartConfig = {
+  /** Enable auto-restart (default: true). */
+  enabled?: boolean;
+  /** Max restart attempts before giving up (default: 12). */
+  maxAttempts?: number;
+  /** Initial delay in ms before first restart (default: 2000). */
+  initialDelayMs?: number;
+  /** Maximum delay cap in ms (default: 30000). */
+  maxDelayMs?: number;
+};
+
 export type ChannelDefaultsConfig = {
   groupPolicy?: GroupPolicy;
   /** Default heartbeat visibility for all channels. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Auto-restart config for channels that stop due to recoverable errors. */
+  autoRestart?: ChannelAutoRestartConfig;
 };
 
 export type ChannelsConfig = {

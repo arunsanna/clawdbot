@@ -18,6 +18,7 @@ import {
   errorShape,
   formatValidationErrors,
   validateChannelsLogoutParams,
+  validateChannelsRestartParams,
   validateChannelsStatusParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
@@ -285,6 +286,60 @@ export const channelsHandlers: GatewayRequestHandlers = {
         plugin,
       });
       respond(true, payload, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  "channels.restart": async ({ params, respond, context }) => {
+    if (!validateChannelsRestartParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid channels.restart params: ${formatValidationErrors(validateChannelsRestartParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const rawChannel = (params as { channel?: unknown }).channel;
+    const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
+    if (!channelId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid channels.restart channel"),
+      );
+      return;
+    }
+    const plugin = getChannelPlugin(channelId);
+    if (!plugin) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `unknown channel: ${channelId}`),
+      );
+      return;
+    }
+    const cfg = loadConfig();
+    const accountIdRaw = (params as { accountId?: unknown }).accountId;
+    const resolvedAccountId =
+      (typeof accountIdRaw === "string" ? accountIdRaw.trim() : "") ||
+      plugin.config.defaultAccountId?.(cfg) ||
+      plugin.config.listAccountIds(cfg)[0] ||
+      DEFAULT_ACCOUNT_ID;
+    try {
+      await context.stopChannel(channelId, resolvedAccountId);
+      await context.startChannel(channelId, resolvedAccountId);
+      respond(
+        true,
+        {
+          channel: channelId,
+          accountId: resolvedAccountId,
+          restarted: true,
+        },
+        undefined,
+      );
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }

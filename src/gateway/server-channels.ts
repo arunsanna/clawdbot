@@ -2,11 +2,58 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+
+// Auto-restart configuration resolved from config
+type AutoRestartPolicy = {
+  enabled: boolean;
+  maxAttempts: number;
+  backoff: BackoffPolicy;
+};
+
+const DEFAULT_AUTO_RESTART_POLICY: AutoRestartPolicy = {
+  enabled: true,
+  maxAttempts: 12,
+  backoff: {
+    initialMs: 2000,
+    maxMs: 30000,
+    factor: 1.5,
+    jitter: 0.1,
+  },
+};
+
+function resolveAutoRestartPolicy(cfg: OpenClawConfig): AutoRestartPolicy {
+  const channelDefaults = cfg.channels?.defaults;
+  const autoRestart = channelDefaults?.autoRestart;
+  if (!autoRestart) return DEFAULT_AUTO_RESTART_POLICY;
+  return {
+    enabled: autoRestart.enabled ?? DEFAULT_AUTO_RESTART_POLICY.enabled,
+    maxAttempts: autoRestart.maxAttempts ?? DEFAULT_AUTO_RESTART_POLICY.maxAttempts,
+    backoff: {
+      initialMs: autoRestart.initialDelayMs ?? DEFAULT_AUTO_RESTART_POLICY.backoff.initialMs,
+      maxMs: autoRestart.maxDelayMs ?? DEFAULT_AUTO_RESTART_POLICY.backoff.maxMs,
+      factor: DEFAULT_AUTO_RESTART_POLICY.backoff.factor,
+      jitter: DEFAULT_AUTO_RESTART_POLICY.backoff.jitter,
+    },
+  };
+}
+
+/**
+ * Check if an error is recoverable and the channel should auto-restart.
+ * Errors from aborted signals (user-initiated stop) are not recoverable.
+ */
+function isRecoverableChannelError(err: unknown, aborted: boolean): boolean {
+  if (aborted) return false;
+  // All non-abort errors are considered recoverable for now
+  // Channels can throw specific non-recoverable errors in the future
+  if (err instanceof Error && err.message === "logged out") return false;
+  return true;
+}
 
 export type ChannelRuntimeSnapshot = {
   channels: Partial<Record<ChannelId, ChannelAccountSnapshot>>;
@@ -148,17 +195,71 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         });
 
         const log = channelLogs[channelId];
-        const task = startAccount({
-          cfg,
-          accountId: id,
-          account,
-          runtime: channelRuntimeEnvs[channelId],
-          abortSignal: abort.signal,
-          log,
-          getStatus: () => getRuntime(channelId, id),
-          setStatus: (next) => setRuntime(channelId, id, next),
-        });
-        const tracked = Promise.resolve(task)
+        const restartPolicy = resolveAutoRestartPolicy(cfg);
+
+        // Task with auto-restart wrapper
+        const runWithAutoRestart = async () => {
+          let attempt = 0;
+          while (!abort.signal.aborted) {
+            attempt++;
+            const currentCfg = loadConfig();
+            const currentAccount = plugin.config.resolveAccount(currentCfg, id);
+            try {
+              await startAccount({
+                cfg: currentCfg,
+                accountId: id,
+                account: currentAccount,
+                runtime: channelRuntimeEnvs[channelId],
+                abortSignal: abort.signal,
+                log,
+                getStatus: () => getRuntime(channelId, id),
+                setStatus: (next) => setRuntime(channelId, id, next),
+              });
+              // Clean exit (channel finished normally)
+              return;
+            } catch (err) {
+              const message = formatErrorMessage(err);
+              const aborted = abort.signal.aborted;
+              setRuntime(channelId, id, {
+                accountId: id,
+                lastError: message,
+                reconnectAttempts: attempt,
+              });
+
+              if (!restartPolicy.enabled || !isRecoverableChannelError(err, aborted)) {
+                log.error?.(`[${id}] channel exited: ${message}`);
+                throw err;
+              }
+
+              if (attempt >= restartPolicy.maxAttempts) {
+                log.error?.(`[${id}] channel failed after ${attempt} restart attempts: ${message}`);
+                throw err;
+              }
+
+              const delayMs = computeBackoff(restartPolicy.backoff, attempt);
+              log.warn?.(
+                `[${id}] channel stopped, restarting in ${delayMs}ms (attempt ${attempt}/${restartPolicy.maxAttempts}): ${message}`,
+              );
+
+              try {
+                await sleepWithAbort(delayMs, abort.signal);
+              } catch {
+                // Aborted during sleep
+                return;
+              }
+
+              // Reset runtime state for restart
+              setRuntime(channelId, id, {
+                accountId: id,
+                running: true,
+                lastStartAt: Date.now(),
+                reconnectAttempts: attempt,
+              });
+            }
+          }
+        };
+
+        const tracked = runWithAutoRestart()
           .catch((err) => {
             const message = formatErrorMessage(err);
             setRuntime(channelId, id, { accountId: id, lastError: message });

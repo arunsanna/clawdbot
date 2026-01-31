@@ -12,11 +12,17 @@ import {
 } from "./zod-schema.providers-core.js";
 import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 import { GroupPolicySchema } from "./zod-schema.core.js";
-import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
+import {
+  ChannelAutoRestartConfigSchema,
+  ChannelHeartbeatVisibilitySchema,
+} from "./zod-schema.channels.js";
 
 export * from "./zod-schema.providers-core.js";
 export * from "./zod-schema.providers-whatsapp.js";
-export { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
+export {
+  ChannelAutoRestartConfigSchema,
+  ChannelHeartbeatVisibilitySchema,
+} from "./zod-schema.channels.js";
 
 export const ChannelsSchema = z
   .object({
@@ -24,6 +30,7 @@ export const ChannelsSchema = z
       .object({
         groupPolicy: GroupPolicySchema.optional(),
         heartbeat: ChannelHeartbeatVisibilitySchema,
+        autoRestart: ChannelAutoRestartConfigSchema,
       })
       .strict()
       .optional(),

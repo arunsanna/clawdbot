@@ -143,6 +143,7 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
     method.startsWith("wizard.") ||
     method.startsWith("update.") ||
     method === "channels.logout" ||
+    method === "channels.restart" ||
     method === "skills.install" ||
     method === "skills.update" ||
     method === "cron.add" ||
