@@ -7,12 +7,22 @@ function throwAbortError(): never {
 }
 
 /**
- * Checks if an object is a valid AbortSignal using structural typing.
- * This is more reliable than `instanceof` across different realms (VM, iframe, etc.)
- * where the AbortSignal constructor may differ.
+ * Checks if an object is a valid AbortSignal that can be used with AbortSignal.any().
+ * Uses both instanceof check AND structural validation to handle cross-realm issues
+ * where the AbortSignal constructor may differ between contexts.
  */
-function isAbortSignal(obj: unknown): obj is AbortSignal {
-  return obj instanceof AbortSignal;
+function isRealAbortSignal(obj: unknown): obj is AbortSignal {
+  if (!(obj instanceof AbortSignal)) {
+    return false;
+  }
+  // Additional validation: ensure it has the expected AbortSignal properties
+  // This catches cases where instanceof passes but the object is malformed
+  const signal = obj as AbortSignal;
+  return (
+    typeof signal.aborted === "boolean" &&
+    typeof signal.addEventListener === "function" &&
+    typeof signal.removeEventListener === "function"
+  );
 }
 
 function combineAbortSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | undefined {
@@ -31,7 +41,7 @@ function combineAbortSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | un
   if (b?.aborted) {
     return b;
   }
-  if (typeof AbortSignal.any === "function" && isAbortSignal(a) && isAbortSignal(b)) {
+  if (typeof AbortSignal.any === "function" && isRealAbortSignal(a) && isRealAbortSignal(b)) {
     return AbortSignal.any([a, b]);
   }
 
