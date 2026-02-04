@@ -27,6 +27,7 @@ apps/android/.cxx/
 *.bun-build
 apps/macos/.build/
 apps/shared/MoltbotKit/.build/
+apps/shared/OpenClawKit/.build/
 **/ModuleCache/
 bin/
 bin/clawdbot-mac
@@ -44,6 +45,10 @@ apps/ios/Clawdbot.xcodeproj/**
 apps/macos/.build/**
 **/*.bun-build
 apps/ios/*.xcfilelist
+
+# Local agent config/state (generated)
+.claude/settings.local.json
+.claude/workflow-state.json
 
 # Vendor build artifacts
 vendor/a2ui/renderers/lit/dist/
