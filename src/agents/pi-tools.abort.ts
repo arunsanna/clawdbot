@@ -17,7 +17,7 @@ function isRealAbortSignal(obj: unknown): obj is AbortSignal {
   }
   // Additional validation: ensure it has the expected AbortSignal properties
   // This catches cases where instanceof passes but the object is malformed
-  const signal = obj as AbortSignal;
+  const signal = obj;
   return (
     typeof signal.aborted === "boolean" &&
     typeof signal.addEventListener === "function" &&
